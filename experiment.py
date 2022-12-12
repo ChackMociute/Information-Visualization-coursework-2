@@ -2,15 +2,16 @@ import os
 import json
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import matplotlib.pyplot as plt
-from countries import countries
 from time import sleep, time
 from abc import ABC, abstractmethod
+from random import choice
 
 
 class Experiment(ABC):
     NAME = None
-    COUNTRY_NAMES = [c['name'] for c in countries]
+    COUNTRY_NAMES = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).name
     def __init__(self, n=10):
         self.path = 'results' if self.NAME is None else os.path.join('results', self.NAME)
         if not os.path.exists(self.path):
@@ -38,6 +39,13 @@ class Experiment(ABC):
         print("{0:40}{1:.2}".format('Precentage of correct answers:', (self.correct == self.ans).sum()/self.n))
         print("{0:40}{1:.2}".format('Mean respnse time:', self.times.mean()))
         print("{0:40}{1:.2}".format('Response time standard deviation:', self.times.std()))
+        
+    def user_input(self, sample):
+        print("Which country pollutes the most?")
+        for i, c in enumerate(sample):
+            print("{0:40}{1}".format(c + ':', i+1))
+        s = time()
+        return int(input("")), (time() - s)
     
     @abstractmethod
     def run(self):
@@ -58,13 +66,6 @@ class BarExperiment(Experiment):
         plt.xticks(rotation=90)
         plt.show()
         
-    def user_input(self, sample):
-        print("Which country pollutes the most?")
-        for i, c in enumerate(sample):
-            print("{0:40}{1}".format(c + ':', i+1))
-        s = time()
-        return int(input("")), (time() - s)
-        
     def run(self):
         for i in range(self.n):
             self.generate_data()
@@ -77,5 +78,30 @@ class BarExperiment(Experiment):
 
 class MapExperiment(Experiment):
     NAME = 'map'
+    DROP = pd.Index(['Fiji', 'Russia', 'France'])
+    CONTINENTS = ['Africa', 'North America', 'Asia', 'Oceania', 'South America', 'Europe']
+    def generate_data(self, world):
+        pollution = pd.DataFrame(np.random.uniform(0, 100, (20, len(self.COUNTRY_NAMES))),
+                                 columns=self.COUNTRY_NAMES,
+                                 index=reversed(pd.date_range(start='2000', end='2020', freq='Y')))
+        self.data = world.join(pollution.sum().rename('pollution'), on='name').drop(self.DROP)
+        
+    def plot(self, sample):
+        self.data.plot(column='pollution', cmap="Reds", legend=True)
+        for label, point in self.data.loc[sample].point.items():
+            plt.annotate(sample.get_loc(label) + 1, xy=point, horizontalalignment='center')
+        plt.title('Pollution')
+        plt.axis('off')
+        plt.show()
+        
     def run(self):
-        raise NotImplementedError('MapExperiment is not yet implemented')
+        world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres')).set_index('name')
+        world['point'] = world['geometry'].apply(lambda x: x.representative_point().coords[:][0])
+        for i in range(self.n):
+            self.generate_data(world)
+            self.data = self.data[self.data["continent"] == choice(self.CONTINENTS)].sort_values('pollution', ascending=False)
+            answer_sample = pd.concat([self.data.iloc[:1], self.data[1:].sample(4)]).sample(frac=1).index
+            self.correct[i] = answer_sample.get_loc(self.data.iloc[:1].index[0]) + 1
+            self.plot(answer_sample)
+            self.ans[i], self.times[i] = self.user_input(answer_sample)
+            sleep(1)
